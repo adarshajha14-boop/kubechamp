@@ -1,0 +1,235 @@
+# KubeChamp Observability Stack Values
+
+# Prometheus Stack (includes Prometheus, AlertManager, Node Exporter)
+prometheus:
+  enabled: true
+  
+  prometheusSpec:
+    replicas: 2
+    retention: 15d
+    
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1024Mi
+    
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 10Gi
+
+# Alert Rules
+alertRules:
+  enabled: true
+  
+  rules:
+    - alert: HighErrorRate
+      expr: 'rate(http_requests_total{status=~"5.."}[5m]) > 0.05'
+      for: 5m
+      severity: critical
+    
+    - alert: PodCrashLooping
+      expr: 'rate(kube_pod_container_status_restarts_total[1h]) > 5'
+      for: 5m
+      severity: warning
+    
+    - alert: HighMemoryUsage
+      expr: 'container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9'
+      for: 5m
+      severity: warning
+
+# Grafana Configuration
+grafana:
+  enabled: true
+  
+  replicas: 2
+  
+  adminPassword: "admin"  # Change in production
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  persistence:
+    enabled: true
+    size: 10Gi
+  
+  # Pre-configured dashboards
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          folderId: null
+          updateIntervalSeconds: 10
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+
+  dashboards:
+    default:
+      kubernetes-cluster:
+        url: https://grafana.com/api/dashboards/7249/revisions/1/download
+      pod-metrics:
+        url: https://grafana.com/api/dashboards/6417/revisions/1/download
+      node-exporter:
+        url: https://grafana.com/api/dashboards/1860/revisions/23/download
+
+# Elasticsearch Configuration
+elasticsearch:
+  enabled: true
+  
+  replicas: 3
+  
+  esJavaOpts: "-Xmx512m -Xms512m"
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  persistence:
+    enabled: true
+    size: 100Gi
+  
+  # Cluster settings
+  clustering:
+    enabled: true
+    minimumMasterNodes: 2
+
+# Kibana Configuration
+kibana:
+  enabled: true
+  
+  replicas: 2
+  
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  
+  env:
+    ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    KIBANA_DEFAULTAPPID: "discover"
+
+# Log Aggregation (Fluent Bit or Logstash)
+logAggregation:
+  enabled: true
+  type: fluent-bit  # can be: fluent-bit, logstash
+  
+  config:
+    # Parse container logs
+    parsers: |
+      [PARSER]
+          Name        docker
+          Format      json
+          Time_Key    time
+          Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+    
+    # Send to Elasticsearch
+    outputs: |
+      [OUTPUT]
+          Name            es
+          Match           *
+          Host            elasticsearch
+          Port            9200
+          HTTP_User       elastic
+          HTTP_Passwd     changeme
+          Logstash_Format On
+          Retry_Limit     5
+
+# Jaeger Distributed Tracing
+jaeger:
+  enabled: true
+  
+  # Using all-in-one image for simplicity (use production setup for high volume)
+  allInOne:
+    enabled: true
+    image: jaegertracing/all-in-one
+    tag: latest
+  
+  collector:
+    service:
+      zipkin:
+        port: 9411
+  
+  storage:
+    type: elasticsearch
+    elasticsearch:
+      host: elasticsearch
+      port: 9200
+
+# Metrics Server
+metricsServer:
+  enabled: true
+  args:
+    - "--kubelet-insecure-tls"
+    - "--kubelet-preferred-address-types=InternalIP"
+
+# Node Exporter (for hardware metrics)
+nodeExporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Service Monitors for custom metrics scraping
+serviceMonitors:
+  enabled: true
+  
+  # Example: Application Prometheus endpoints
+  applications:
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+# Custom Metrics
+customMetrics:
+  enabled: true
+  
+  rules:
+    - record: http:requests:total_rate_1m
+      expr: rate(http_requests_total[1m])
+    
+    - record: container:memory:usage_mb
+      expr: container_memory_usage_bytes / 1024 / 1024
+
+# Data Retention
+dataRetention:
+  prometheus: 15d
+  elasticsearch: 30d
+  jaeger: 7d

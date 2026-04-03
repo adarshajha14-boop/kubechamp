@@ -1,0 +1,14 @@
+apiVersion: v2
+name: user-service
+description: User microservice example for KubeChamp
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+maintainers:
+  - name: KubeChamp Team
+    email: team@kubechamp.io
+
+keywords:
+  - user
+  - microservice

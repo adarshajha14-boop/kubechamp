@@ -1,0 +1,173 @@
+# KubeChamp Platform Core Values
+
+# Ingress NGINX Controller
+ingressNginx:
+  enabled: true
+  controller:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 90Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    service:
+      type: LoadBalancer
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internet-facing
+    metrics:
+      enabled: true
+
+# Kong API Gateway
+kong:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: kong
+    tag: "3.3-alpine"
+  
+  env:
+    database: postgres
+    proxy_access_log: "/dev/stdout"
+    admin_access_log: "/dev/stdout"
+    proxy_error_log: "/dev/stderr"
+    admin_error_log: "/dev/stderr"
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  admin:
+    enabled: true
+    type: ClusterIP
+    port: 8001
+
+# RBAC Configuration
+rbac:
+  create: true
+  serviceAccountName: kubechamp-platform
+
+# Pod Security Policy
+podSecurityPolicy:
+  enabled: true
+
+# Network Policies
+networkPolicies:
+  enabled: true
+  
+  # Deny all ingress by default
+  denyAllIngress: true
+  
+  # Allow specific pods to communicate
+  allowRules:
+    - name: allow-ingress-to-services
+      from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+    - name: allow-kong-to-backend
+      from:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+      ports:
+        - protocol: TCP
+          port: 8000
+
+# API Rate Limiting
+rateLimiting:
+  enabled: true
+  global:
+    requestsPerSecond: 1000
+  perService:
+    requestsPerSecond: 100
+
+# Service Mesh (Istio)
+serviceMesh:
+  enabled: false  # Set to true if Istio is installed
+  virtualServiceNamespace: istio-system
+  
+  virtualServices:
+    - name: api-gateway
+      hosts:
+        - api.kubechamp.io
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+
+# SSL/TLS Configuration
+tls:
+  enabled: true
+  certManager:
+    enabled: true
+    issuer: letsencrypt-prod
+  
+  # Self-signed cert (for non-prod)
+  selfSigned:
+    enabled: false
+    secretName: kubechamp-tls
+
+# Monitoring and Metrics
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+  
+  dashboards:
+    enabled: true
+
+# Logging
+logging:
+  enabled: true
+  level: info
+  format: json
+  
+  # Send logs to Elasticsearch
+  elasticsearch:
+    enabled: false
+    hosts:
+      - elasticsearch:9200
+
+# Health Checks
+healthChecks:
+  enabled: true
+  
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# Pod Disruption Budgets
+podDisruptionBudgets:
+  enabled: true
+  minAvailable: 1
+
+# Horizontal Pod Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# Node Affinity
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: workload-type
+              operator: In
+              values:
+                - system
+                - applications

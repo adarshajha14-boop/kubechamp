@@ -1,0 +1,45 @@
+# Terraform files
+*.tfstate
+*.tfstate.*.backup
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+*.jar
+*.zip
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local development
+.env
+.env.local
+*.log
+node_modules/
+__pycache__/
+venv/
+.venv/
+
+# Helm
+Chart.lock
+
+# Kubernetes
+kubeconfig
+.kube/
+
+# AWS
+.aws/credentials
+.aws/config
+
+# Misc
+*.bak
+.history

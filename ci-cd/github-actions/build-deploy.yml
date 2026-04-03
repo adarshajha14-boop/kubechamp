@@ -1,0 +1,280 @@
+name: Build and Deploy Microservice
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+    paths:
+      - 'services/**'
+      - '.github/workflows/build-deploy.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  REGISTRY: ghcr.io
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  # Job 1: Build and test
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+      
+      - name: Log in to Amazon ECR
+        if: github.event_name != 'pull_request'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}
+            ${{ env.ECR_REGISTRY }}/kubechamp/${{ github.event.repository.name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+      
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}:buildcache,mode=max
+      
+      - name: Scan image for vulnerabilities
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --exit-code 0 \
+            ${{ steps.meta.outputs.tags }}
+      
+      - name: Run tests
+        run: |
+          docker run --rm \
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.meta.outputs.version }} \
+            npm test
+      
+      - name: Run security checks
+        run: |
+          docker run --rm \
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.meta.outputs.version }} \
+            npm run security-check
+
+  # Job 2: Code quality
+  code-quality:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Run SonarQube scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      
+      - name: Run linting
+        run: |
+          npm install
+          npm run lint
+
+  # Job 3: Security scanning
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run SAST scan (Semgrep)
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/owasp-top-ten
+            p/cwe-top-25
+      
+      - name: Run dependency check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'kubechamp'
+          path: '.'
+          format: 'SARIF'
+      
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: results.sarif
+
+  # Job 4: Deploy to dev
+  deploy-dev:
+    needs: [build, code-quality, security]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name kubechamp-dev \
+            --region us-east-1
+      
+      - name: Deploy to dev cluster
+        run: |
+          helm upgrade --install ${{ github.event.repository.name }} ./helm-chart \
+            --namespace default \
+            --values values-dev.yaml \
+            --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --wait
+
+  # Job 5: Deploy to SIT
+  deploy-sit:
+    needs: [build, code-quality, security]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name kubechamp-sit \
+            --region us-east-1
+      
+      - name: Run integration tests
+        run: |
+          helm template ./helm-chart \
+            --values values-sit.yaml | \
+            kubectl dry-run=client -f -
+      
+      - name: Deploy to SIT cluster
+        run: |
+          helm upgrade --install ${{ github.event.repository.name }} ./helm-chart \
+            --namespace default \
+            --values values-sit.yaml \
+            --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --wait
+
+  # Job 6: Approval and deploy to prod
+  deploy-prod:
+    needs: deploy-sit
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://api.kubechamp.io
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name kubechamp-prod \
+            --region us-east-1
+      
+      - name: Deploy to prod (Canary)
+        run: |
+          helm upgrade --install ${{ github.event.repository.name }} ./helm-chart \
+            --namespace default \
+            --values values-prod.yaml \
+            --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --set canary.enabled=true \
+            --set canary.weight=10 \
+            --wait
+      
+      - name: Monitor canary deployment
+        run: |
+          for i in {1..60}; do
+            ERROR_RATE=$(kubectl get service ${{ github.event.repository.name }} \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' | \
+              xargs -I {} curl -s http://{}/metrics | grep 'http_requests_total{status="5' | awk '{print $2}')
+            
+            if (( $(echo "$ERROR_RATE > 0.05" | bc -l) )); then
+              echo "Error rate too high, rolling back..."
+              helm rollback ${{ github.event.repository.name }}
+              exit 1
+            fi
+            sleep 10
+          done
+      
+      - name: Complete canary deployment
+        run: |
+          helm upgrade ${{ github.event.repository.name }} ./helm-chart \
+            --namespace default \
+            --values values-prod.yaml \
+            --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --set canary.enabled=false \
+            --wait
+      
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Deployment to production completed'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()

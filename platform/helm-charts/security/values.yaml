@@ -1,0 +1,239 @@
+# KubeChamp Security Stack Values
+
+# HashiCorp Vault Configuration
+vault:
+  enabled: true
+  
+  server:
+    replicas: 3
+    
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    
+    # Vault configuration
+    config:
+      storage:
+        raft:
+          path: /vault/data
+      listener:
+        tcp:
+          address: "[::]:8200"
+          tls_disable: false
+          tls_cert_file: /vault/config/tls/server.crt
+          tls_key_file: /vault/config/tls/server.key
+      ui: true
+      api_addr: "https://vault:8200"
+      cluster_addr: "https://127.0.0.1:8201"
+    
+    # Persistence
+    dataStorage:
+      size: 10Gi
+      storageClass: "gp2"
+    
+    # High Availability
+    ha:
+      enabled: true
+      replicas: 3
+
+# RBAC Configuration
+rbac:
+  enabled: true
+  
+  # Default service account roles
+  serviceAccounts:
+    - name: application-reader
+      rules:
+        - apiGroups: [""]
+          resources: ["secrets"]
+          verbs: ["get", "list"]
+    
+    - name: platform-admin
+      rules:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          verbs: ["*"]
+
+# Pod Security Policies
+podSecurityPolicies:
+  enabled: true
+  
+  # Restricted policy (strict security)
+  restricted:
+    name: restricted
+    rules:
+      privileged: false
+      allowPrivilegeEscalation: false
+      requiredDropCapabilities:
+        - ALL
+      volumes:
+        - "configMap"
+        - "emptyDir"
+        - "projected"
+        - "secret"
+        - "downwardAPI"
+        - "persistentVolumeClaim"
+      hostNetwork: false
+      hostIPC: false
+      hostPID: false
+      runAsUser:
+        rule: "MustRunAsNonRoot"
+      seLinux:
+        rule: "MustRunAs"
+
+# Network Policies
+networkPolicies:
+  enabled: true
+  
+  default:
+    name: default-deny-ingress
+    policyTypes:
+      - Ingress
+    ingress: []
+  
+  # Allow specific ingress
+  ingress:
+    - name: allow-from-ingress
+      namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    
+    - name: allow-from-prometheus
+      namespaceSelector:
+        matchLabels:
+          name: observability
+
+# Sealed Secrets for Secret Management
+sealedSecrets:
+  enabled: true
+  
+  commandLine:
+    args:
+      - "--key-rotation-period=30d"
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Image Security
+imageSecurity:
+  enabled: true
+  
+  # Pod Security Standards
+  podSecurityStandards: restricted
+  
+  # Image scanning
+  imageScanning:
+    enabled: true
+    tool: trivy  # alternatives: clair, anchore
+  
+  # Image pull secrets
+  imagePullSecrets:
+    - name: docker-registry-secret
+
+# Audit Logging
+auditLogging:
+  enabled: true
+  
+  logLevel: Metadata  # options: None, Metadata, RequestResponse, RequestResponseWithUser
+  
+  # Audit policy rules
+  policies:
+    - level: Metadata
+      omitStages:
+        - RequestReceived
+    
+    - level: RequestResponse
+      verbs: ["create", "update", "patch", "delete"]
+    
+    - level: RequestResponseWithUser
+      verbs: ["*"]
+      resources:
+        - group: ""
+          resources: ["secrets"]
+
+# Secrets Management
+secretsManagement:
+  enabled: true
+  
+  # Use Vault for secret rotation
+  vaultIntegration:
+    enabled: true
+    skipVerify: false
+  
+  # Secret rotation policies
+  rotationPolicies:
+    - name: database-credentials
+      rotationInterval: 90d
+      resources:
+        - kind: Secret
+          selector:
+            matchLabels:
+              rotation-enabled: "true"
+
+# TLS Configuration
+tls:
+  enabled: true
+  
+  # Enable mTLS for service-to-service communication
+  mTLS:
+    enabled: true
+    provider: vault  # or: cert-manager
+  
+  # Certificate Management
+  certManager:
+    enabled: true
+    issuer: vault-issuer
+    issuerKind: Issuer
+
+# Compliance and Standards
+compliance:
+  enabled: true
+  
+  standards:
+    - SOC2
+    - PCI-DSS
+    - HIPAA
+  
+  # Regular security scanning
+  securityScan:
+    enabled: true
+    schedule: "0 2 * * *"  # 2 AM daily
+
+# API Security
+apiSecurity:
+  enabled: true
+  
+  # Rate limiting
+  rateLimiting:
+    enabled: true
+    requestsPerSecond: 1000
+  
+  # API authentication
+  authentication:
+    enabled: true
+    type: oauth2  # alternatives: jwt, basic, mutual-tls
+  
+  # Authorization
+  authorization:
+    enabled: true
+    type: rbac
+
+# Falco Runtime Security
+runtimeSecurity:
+  enabled: false  # Optional, requires Falco installation
+  
+  rules:
+    - rule: Detect privilege escalation
+      enabled: true
+    
+    - rule: Detect unauthorized shell access
+      enabled: true

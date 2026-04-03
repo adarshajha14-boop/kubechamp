@@ -1,0 +1,522 @@
+#!/bin/bash
+
+##############################################################################
+# KubeChamp Developer CLI Tool
+# Enables developers to easily manage microservices across environments
+##############################################################################
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KC_VERSION="1.0.0"
+KC_CONFIG_DIR="${XDG_CONFIG_HOME:=$HOME/.config}/kubechamp"
+KC_CACHE_DIR="${XDG_CACHE_HOME:=$HOME/.cache}/kubechamp"
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+##############################################################################
+# Utility Functions
+##############################################################################
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $*"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $*"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $*" >&2
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $*"
+}
+
+check_prerequisites() {
+    local missing_tools=()
+    
+    for tool in kubectl helm aws jq; do
+        if ! command -v "$tool" &> /dev/null; then
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        log_error "Missing required tools: ${missing_tools[*]}"
+        log_info "Please install the missing tools and try again"
+        return 1
+    fi
+}
+
+ensure_config_dir() {
+    mkdir -p "$KC_CONFIG_DIR"
+    mkdir -p "$KC_CACHE_DIR"
+}
+
+##############################################################################
+# Cluster Management
+##############################################################################
+
+get_cluster_context() {
+    local env=$1
+    echo "kubechamp-${env}"
+}
+
+set_cluster_context() {
+    local env=$1
+    local context=$(get_cluster_context "$env")
+    
+    log_info "Setting kubectl context to $context"
+    kubectl config use-context "$context" || {
+        log_error "Failed to switch context to $context"
+        return 1
+    }
+}
+
+##############################################################################
+# Service Management
+##############################################################################
+
+kc_init() {
+    local service_name=$1
+    local template=${2:-go-rest-api}
+    
+    log_info "Initializing new service: $service_name with template: $template"
+    
+    # Create service directory
+    mkdir -p "$service_name"
+    cd "$service_name"
+    
+    # Copy template files based on selected template
+    case "$template" in
+        go-rest-api)
+            init_go_service "$service_name"
+            ;;
+        node-express)
+            init_node_service "$service_name"
+            ;;
+        python-fastapi)
+            init_python_service "$service_name"
+            ;;
+        *)
+            log_error "Unknown template: $template"
+            return 1
+            ;;
+    esac
+    
+    log_success "Service $service_name initialized successfully"
+}
+
+init_go_service() {
+    local service_name=$1
+    
+    # Create directories
+    mkdir -p cmd pkg config
+    
+    # Create Dockerfile
+    cat > Dockerfile << 'EOF'
+FROM golang:1.21-alpine as builder
+WORKDIR /build
+COPY . .
+RUN go build -o app ./cmd/main.go
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+COPY --from=builder /build/app /app
+EXPOSE 8080
+CMD ["./app"]
+EOF
+    
+    # Create main.go
+    cat > cmd/main.go << 'EOF'
+package main
+
+import (
+    "fmt"
+    "net/http"
+)
+
+func main() {
+    http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        fmt.Fprintf(w, "OK")
+    })
+    
+    http.ListenAndServe(":8080", nil)
+}
+EOF
+    
+    # Create go.mod
+    cat > go.mod << EOF
+module github.com/kubechamp/$service_name
+
+go 1.21
+EOF
+    
+    # Create helm chart
+    mkdir -p helm-chart/templates
+    create_helm_chart_files "$service_name"
+}
+
+init_node_service() {
+    local service_name=$1
+    
+    # Create directories
+    mkdir -p src config
+    
+    # Create Dockerfile
+    cat > Dockerfile << 'EOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 8080
+CMD ["node", "src/index.js"]
+EOF
+    
+    # Create package.json
+    cat > package.json << EOF
+{
+  "name": "$service_name",
+  "version": "1.0.0",
+  "description": "KubeChamp microservice",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+EOF
+    
+    # Create index.js
+    cat > src/index.js << 'EOF'
+const express = require('express');
+const app = express();
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK' });
+});
+
+app.listen(8080, () => {
+  console.log('Server running on port 8080');
+});
+EOF
+    
+    # Create helm chart
+    mkdir -p helm-chart/templates
+    create_helm_chart_files "$service_name"
+}
+
+create_helm_chart_files() {
+    local service_name=$1
+    
+    # Chart.yaml
+    cat > helm-chart/Chart.yaml << EOF
+apiVersion: v2
+name: $service_name
+description: KubeChamp microservice
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+EOF
+    
+    # values.yaml
+    cat > helm-chart/values.yaml << 'EOF'
+replicaCount: 3
+
+image:
+  repository: ghcr.io/kubechamp/SERVICE_NAME
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: "SERVICE_NAME.kubechamp.io"
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+probabilityOfFailure: 0.01
+EOF
+}
+
+kc_deploy() {
+    local env=${env:-dev}
+    local service_name=${service_name:-.}
+    
+    # Extract service name from current directory if not provided
+    if [ "$service_name" == "." ]; then
+        service_name=$(basename "$PWD")
+    fi
+    
+    log_info "Deploying $service_name to $env environment"
+    
+    # Set cluster context
+    set_cluster_context "$env"
+    
+    # Build and push image
+    log_info "Building Docker image..."
+    IMAGE_TAG="ghcr.io/kubechamp/$service_name:${SERVICE_VERSION:-latest}"
+    docker build -t "$IMAGE_TAG" .
+    docker push "$IMAGE_TAG"
+    
+    # Deploy with helm
+    log_info "Deploying with Helm..."
+    helm upgrade --install "$service_name" ./helm-chart \
+        --namespace default \
+        --values "values-$env.yaml" \
+        --set image.tag="${SERVICE_VERSION:-latest}" \
+        --wait
+    
+    log_success "Deployment complete"
+}
+
+kc_promote() {
+    local from_env=$1
+    local to_env=$2
+    local require_approval=${3:-false}
+    
+    log_info "Promoting from $from_env to $to_env"
+    
+    # Get current image tag from source environment
+    set_cluster_context "$from_env"
+    local service_name=$(basename "$PWD")
+    local image_tag=$(kubectl get deployment "$service_name" -o jsonpath='{.spec.template.spec.containers[0].image}')
+    
+    log_info "Found image: $image_tag"
+    
+    if [ "$require_approval" == "--require-approval" ]; then
+        read -p "Proceed with promotion to $to_env? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_warning "Promotion cancelled"
+            return 1
+        fi
+    fi
+    
+    # Deploy to target environment
+    set_cluster_context "$to_env"
+    helm upgrade --install "$service_name" ./helm-chart \
+        --namespace default \
+        --values "values-$to_env.yaml" \
+        --set image.tag="$image_tag" \
+        --wait
+    
+    log_success "Promotion to $to_env complete"
+}
+
+##############################################################################
+# Service Inspection
+##############################################################################
+
+kc_status() {
+    local service_name=$1
+    local env=${env:-dev}
+    
+    set_cluster_context "$env"
+    
+    log_info "Status of $service_name in $env:"
+    
+    kubectl get deployment "$service_name"
+    kubectl get pods -l app="$service_name"
+    kubectl get service "$service_name"
+}
+
+kc_logs() {
+    local service_name=$1
+    local tail=${tail:-100}
+    local follow=${follow:-}
+    local env=${env:-dev}
+    
+    set_cluster_context "$env"
+    
+    local kubectl_args=(
+        "logs"
+        "-l" "app=$service_name"
+        "--tail=$tail"
+    )
+    
+    if [ -n "$follow" ]; then
+        kubectl_args+=("-f")
+    fi
+    
+    kubectl "${kubectl_args[@]}"
+}
+
+kc_metrics() {
+    local service_name=$1
+    local env=${env:-dev}
+    
+    set_cluster_context "$env"
+    
+    log_info "Metrics for $service_name in $env:"
+    
+    kubectl top pods -l "app=$service_name"
+}
+
+##############################################################################
+# Observability
+##############################################################################
+
+kc_dashboard() {
+    local env=${env:-dev}
+    
+    log_info "Opening Grafana dashboard for $env environment"
+    
+    case "$env" in
+        dev)
+            open "http://grafana-dev.kubechamp.io"
+            ;;
+        sit)
+            open "http://grafana-sit.kubechamp.io"
+            ;;
+        prod)
+            open "https://grafana-prod.kubechamp.io"
+            ;;
+    esac
+}
+
+##############################################################################
+# Main CLI Router
+##############################################################################
+
+usage() {
+    cat << EOF
+KubeChamp Developer CLI v$KC_VERSION
+
+Usage: kc [COMMAND] [OPTIONS]
+
+Commands:
+    init SERVICE_NAME [TEMPLATE]        Create new microservice
+    deploy [--env ENV]                  Deploy service to environment
+    promote FROM_ENV TO_ENV [OPTIONS]   Promote service between environments
+    status SERVICE_NAME [--env ENV]     Get service status
+    logs SERVICE_NAME [OPTIONS]         View service logs
+    metrics SERVICE_NAME [--env ENV]    View service metrics
+    dashboard [--env ENV]               Open Grafana dashboard
+    version                             Show CLI version
+    help                                Show this help message
+
+Options:
+    --env ENV                           Target environment (dev, sit, prod)
+    --tail LINES                        Number of log lines to show
+    --follow                            Follow logs in real-time
+    --require-approval                  Require approval for promotion
+
+Templates:
+    go-rest-api                         Go REST API service
+    node-express                        Node.js Express service
+    python-fastapi                      Python FastAPI service
+
+Examples:
+    kc init my-service go-rest-api
+    kc deploy --env dev
+    kc promote dev sit
+    kc logs my-service --tail 50 --follow
+
+EOF
+}
+
+main() {
+    ensure_config_dir
+    check_prerequisites
+    
+    local command="${1:-help}"
+    
+    case "$command" in
+        init)
+            kc_init "${2:?Service name required}" "${3:-go-rest-api}"
+            ;;
+        deploy)
+            shift
+            while [[ $# -gt 0 ]]; do
+                case $1 in
+                    --env) env="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            kc_deploy
+            ;;
+        promote)
+            kc_promote "$2" "$3" "${4:-}"
+            ;;
+        status)
+            kc_status "$2"
+            ;;
+        logs)
+            shift
+            local service=$1; shift
+            while [[ $# -gt 0 ]]; do
+                case $1 in
+                    --tail) tail="$2"; shift 2 ;;
+                    --follow) follow=true; shift ;;
+                    --env) env="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            kc_logs "$service"
+            ;;
+        metrics)
+            kc_metrics "$2"
+            ;;
+        dashboard)
+            shift
+            while [[ $# -gt 0 ]]; do
+                case $1 in
+                    --env) env="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            kc_dashboard
+            ;;
+        version)
+            echo "KubeChamp CLI v$KC_VERSION"
+            ;;
+        help|--help|-h)
+            usage
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

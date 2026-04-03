@@ -1,0 +1,38 @@
+apiVersion: v2
+name: networking
+description: KubeChamp Networking Stack (Istio, DNS, Load Balancing)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+maintainers:
+  - name: KubeChamp Team
+    email: team@kubechamp.io
+
+keywords:
+  - networking
+  - service-mesh
+  - istio
+  - load-balancing
+
+home: https://kubechamp.io
+sources:
+  - https://github.com/kubechamp/platform
+
+dependencies:
+  - name: istio-base
+    version: "1.19.0"
+    repository: "https://istio-release.storage.googleapis.com/charts"
+    condition: istio.enabled
+  - name: istiod
+    version: "1.19.0"
+    repository: "https://istio-release.storage.googleapis.com/charts"
+    condition: istio.enabled
+  - name: gateway
+    version: "1.19.0"
+    repository: "https://istio-release.storage.googleapis.com/charts"
+    condition: istio.enabled
+  - name: external-dns
+    version: "1.13.0"
+    repository: "https://kubernetes-sigs.github.io/external-dns/"
+    condition: externalDns.enabled
