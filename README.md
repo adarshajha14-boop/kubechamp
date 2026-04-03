@@ -158,22 +158,71 @@ Navigate to: `https://dashboard.kubechamp.io`
 
 ## 🔍 Observability
 
-### Access Grafana Dashboards
-- **URL**: http://grafana.kubechamp.io
-- **Default Credentials**: admin/admin
-- **Dashboards**: 
-  - Cluster Overview
-  - Service Health
-  - Application Metrics
-  - Resource Utilization
+### Access Observability Services
 
-### View Logs (Kibana)
-- **URL**: http://kibana.kubechamp.io
-- **Log Sources**: All container logs, application logs, audit logs
+#### Option A: Quick Access (Development) - Using Port Forwarding
 
-### Trace Requests (Jaeger)
-- **URL**: http://jaeger.kubechamp.io
-- **Features**: End-to-end request tracing, latency analysis
+For immediate access to Grafana, Kibana, and Jaeger without DNS/Ingress setup:
+
+```bash
+# Access Grafana
+kubectl port-forward -n observability svc/grafana 3000:80 &
+# Navigate to: http://localhost:3000
+# Credentials: admin/admin
+
+# Access Kibana (in another terminal)
+kubectl port-forward -n observability svc/kibana 5601:5601 &
+# Navigate to: http://localhost:5601
+
+# Access Jaeger (in another terminal)
+kubectl port-forward -n observability svc/jaeger 16686:16686 &
+# Navigate to: http://localhost:16686
+
+# Stop port-forwarding when done:
+# pkill kubectl
+```
+
+#### Option B: Production Access (Using DNS + Ingress)
+
+For persistent production access with proper domain names:
+
+1. **Update DNS Records** (in your DNS provider):
+   ```
+   grafana.kubechamp.io   -> <LoadBalancer-IP>
+   kibana.kubechamp.io    -> <LoadBalancer-IP>
+   jaeger.kubechamp.io    -> <LoadBalancer-IP>
+   ```
+
+2. **Get LoadBalancer IP**:
+   ```bash
+   kubectl get svc -n ingress-nginx ingress-nginx-controller
+   # Copy the EXTERNAL-IP value
+   ```
+
+3. **Ingress resources are already configured** in the observability Helm chart. They will automatically expose these services once DNS is set.
+
+4. **Access services**:
+   - Grafana: http://grafana.kubechamp.io (admin/admin)
+   - Kibana: http://kibana.kubechamp.io
+   - Jaeger: http://jaeger.kubechamp.io
+
+### Service Dashboards & Capabilities
+
+**Grafana Dashboards**: 
+- Cluster Overview
+- Service Health
+- Application Metrics
+- Resource Utilization
+
+**Kibana**:
+- Centralized log aggregation from all pods
+- Application logs, system logs, audit logs
+- Log filtering and analysis
+
+**Jaeger**:
+- End-to-end distributed tracing
+- Request flow visualization
+- Latency analysis and bottleneck identification
 
 ---
 
