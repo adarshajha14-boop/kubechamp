@@ -71,9 +71,9 @@ kubechamp/
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Kubernetes 1.24+ cluster (can provision with Terraform)
+- Kubernetes 1.24+ cluster (can provision with Terraform or use Minikube locally)
 - `kubectl`, `helm`, `terraform` installed
-- AWS/GCP/Azure account (for cloud infrastructure)
+- AWS/GCP/Azure account (for cloud infrastructure) OR Minikube (for local development)
 
 ### Option 1: Deploy with Terraform (Recommended)
 
@@ -104,7 +104,43 @@ helm install observability kubechamp/observability -n observability --create-nam
 helm install security kubechamp/security -n security --create-namespace
 ```
 
-### Option 3: Local Development with Docker Compose
+### Option 3: Local Development with Minikube
+
+For developers who want to run the full platform locally:
+
+```bash
+# Start Minikube (if not already running)
+minikube start --kubernetes-version=v1.27.0 --memory=4096 --cpus=2
+
+# Enable required addons
+minikube addons enable ingress
+minikube addons enable metrics-server
+
+# Deploy platform components
+cd platform/helm-charts
+
+# Install platform core
+helm install platform-core ./platform-core -n platform --create-namespace
+
+# Install observability stack
+helm install observability ./observability -n observability --create-namespace
+
+# Install security components
+helm install security ./security -n security --create-namespace
+
+# Install networking components
+helm install networking ./networking -n networking --create-namespace
+
+# Wait for deployments
+kubectl wait --for=condition=available --timeout=300s deployment --all -n platform
+kubectl wait --for=condition=available --timeout=300s deployment --all -n observability
+
+# Access services via port-forwarding (see Observability section below)
+# Or enable Minikube tunnel for LoadBalancer services
+minikube tunnel
+```
+
+### Option 4: Local Development with Docker Compose
 
 ```bash
 docker-compose up -d
