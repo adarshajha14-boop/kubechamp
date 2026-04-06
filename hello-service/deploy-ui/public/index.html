@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello Service Deployment UI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .step {
+            margin: 20px 0;
+            padding: 15px;
+            border-left: 4px solid #007acc;
+            background: #f9f9f9;
+        }
+        .step h3 {
+            margin-top: 0;
+            color: #007acc;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #005aa3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .output {
+            background: #f4f4f4;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .progress {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .url-display {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .url-display a {
+            color: #007acc;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .url-display a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Hello Service Deployment UI</h1>
+        <p>Deploy the Hello Service on Minikube with a single click. Follow the steps in order.</p>
+
+        <div id="progress" class="progress">
+            <p>Executing command... Please wait.</p>
+        </div>
+
+        <div class="step">
+            <h3>Step 1: Start Minikube</h3>
+            <p>Initialize the local Kubernetes cluster with ingress enabled.</p>
+            <button onclick="executeCommand('start-minikube')">Start Minikube</button>
+            <div id="output-start-minikube" class="output" style="display: none;"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 2: Build Docker Image</h3>
+            <p>Build the Hello Service Docker image.</p>
+            <button onclick="executeCommand('build-image')">Build Image</button>
+            <div id="output-build-image" class="output" style="display: none;"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 3: Load Image to Minikube</h3>
+            <p>Load the built image into Minikube's Docker environment.</p>
+            <button onclick="executeCommand('load-image')">Load Image</button>
+            <div id="output-load-image" class="output" style="display: none;"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 4: Deploy Service</h3>
+            <p>Deploy the Hello Service using Helm.</p>
+            <button onclick="executeCommand('deploy-service')">Deploy Service</button>
+            <div id="output-deploy-service" class="output" style="display: none;"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 5: Setup DNS</h3>
+            <p>Add the service domain to local hosts file.</p>
+            <button onclick="executeCommand('setup-dns')">Setup DNS</button>
+            <div id="output-setup-dns" class="output" style="display: none;"></div>
+        </div>
+
+        <div class="step">
+            <h3>Step 6: Start Tunnel</h3>
+            <p>Start Minikube tunnel for ingress access.</p>
+            <button onclick="executeCommand('start-tunnel')">Start Tunnel</button>
+            <div id="output-start-tunnel" class="output" style="display: none;"></div>
+        </div>
+
+        <div class="step">
+            <h3>Check Status</h3>
+            <p>Verify the deployment status.</p>
+            <button onclick="executeCommand('check-status')">Check Status</button>
+            <div id="output-check-status" class="output" style="display: none;"></div>
+        </div>
+
+        <div id="service-url" class="url-display" style="display: none;">
+            <h3>🎉 Service Deployed Successfully!</h3>
+            <p>Access your Hello Service at: <a href="http://hello-service.local" target="_blank">http://hello-service.local</a></p>
+        </div>
+
+        <div class="step">
+            <h3>Cleanup</h3>
+            <p>Remove the deployed service and stop tunnel.</p>
+            <button onclick="executeCommand('cleanup')" style="background: #dc3545;">Cleanup</button>
+            <div id="output-cleanup" class="output" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        function executeCommand(command) {
+            const outputDiv = document.getElementById(`output-${command}`);
+            const progressDiv = document.getElementById('progress');
+            const buttons = document.querySelectorAll('button');
+
+            // Show progress
+            progressDiv.style.display = 'block';
+
+            // Disable all buttons
+            buttons.forEach(btn => btn.disabled = true);
+
+            // Clear previous output
+            outputDiv.innerHTML = '';
+            outputDiv.style.display = 'block';
+
+            socket.emit('execute-command', command);
+        }
+
+        socket.on('command-output', (data) => {
+            const progressDiv = document.getElementById('progress');
+            const buttons = document.querySelectorAll('button');
+
+            if (data.type === 'stdout' || data.type === 'stderr') {
+                const outputDiv = document.querySelector('.output[style*="display: block"]');
+                if (outputDiv) {
+                    outputDiv.innerHTML += data.data;
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                }
+            } else if (data.type === 'exit') {
+                // Hide progress
+                progressDiv.style.display = 'none';
+
+                // Re-enable buttons
+                buttons.forEach(btn => btn.disabled = false);
+
+                // Show service URL if deployment was successful
+                if (data.code === 0) {
+                    const outputDiv = document.querySelector('.output[style*="display: block"]');
+                    if (outputDiv && outputDiv.id.includes('deploy-service')) {
+                        document.getElementById('service-url').style.display = 'block';
+                    }
+                }
+            }
+        });
+
+        // Auto-scroll output
+        function scrollToBottom() {
+            const outputs = document.querySelectorAll('.output');
+            outputs.forEach(output => {
+                output.scrollTop = output.scrollHeight;
+            });
+        }
+
+        setInterval(scrollToBottom, 100);
+    </script>
+</body>
+</html>
